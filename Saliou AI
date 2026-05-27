@@ -1,0 +1,185 @@
+from openai import OpenAI
+
+# Вставь сюда свой ключ Groq
+GROQ_API_KEY = ""
+
+client = OpenAI(
+    api_key=GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1"
+)
+
+BOT_NAME = "Saliou AI"
+
+system_prompt = f"""
+Ты — {BOT_NAME}, очень харизматичный, живой, умный и добрый собеседник.
+Общаешься естественно, по-человечески, без официоза.
+Можно лёгкий юмор, иронию и характер, но без грубости, мата, унижения и токсичности.
+Если пользователь шутит — подыгрывай.
+Если пользователь устал или грустит — отвечай мягче и теплее.
+Если пользователь просит кратко — отвечай кратко.
+Если пользователь хочет поболтать — будь разговорчивым и интересным.
+Запоминай факты, которые пользователь сообщает о себе в этом чате, и используй их дальше.
+Если знаешь имя пользователя из диалога — иногда можешь обращаться по имени, но не в каждом сообщении.
+Никогда не говори слишком сухо, как робот.
+"""
+
+messages = [
+    {"role": "system", "content": system_prompt}
+]
+
+memory = {
+    "name": None,
+    "facts": []
+}
+
+
+def update_memory(user_text: str):
+    text = user_text.strip()
+    low = text.lower()
+
+    name_patterns = [
+        "меня зовут ",
+        "я ",
+        "моё имя ",
+        "мое имя ",
+        "зови меня "
+    ]
+
+    for p in name_patterns:
+        if low.startswith(p):
+            possible_name = text[len(p):].strip(" .,!?:;\"'()[]{}")
+            if 1 <= len(possible_name) <= 30 and " " not in possible_name.strip():
+                memory["name"] = possible_name
+                break
+
+    fact_triggers = [
+        "я люблю",
+        "мне нравится",
+        "я ненавижу",
+        "я хочу",
+        "я работаю",
+        "я учусь",
+        "у меня есть",
+        "мой любимый",
+        "моя любимая"
+    ]
+
+    for trigger in fact_triggers:
+        if low.startswith(trigger):
+            if text not in memory["facts"]:
+                memory["facts"].append(text)
+            break
+
+    if len(memory["facts"]) > 10:
+        memory["facts"] = memory["facts"][-10:]
+
+
+def build_memory_message():
+    parts = []
+
+    if memory["name"]:
+        parts.append(f"Имя пользователя: {memory['name']}.")
+
+    if memory["facts"]:
+        facts_text = "\n".join(f"- {fact}" for fact in memory["facts"])
+        parts.append(f"Факты о пользователе из текущего чата:\n{facts_text}")
+
+    if not parts:
+        return None
+
+    return {
+        "role": "system",
+        "content": "Используй это как память о пользователе:\n" + "\n".join(parts)
+    }
+
+
+print(f"Чат с {BOT_NAME} запущен.")
+print("Команды:")
+print("  /выход  — закончить чат")
+print("  /память — показать, что бот запомнил")
+print("  /сброс  — очистить историю и память")
+print("  /кратко — переключить бота на короткие ответы")
+print("  /обычно — вернуть обычный стиль\n")
+
+short_mode = False
+
+while True:
+    try:
+        user_input = input("Ты: ").strip()
+    except KeyboardInterrupt:
+        print(f"\n{BOT_NAME}: Пока.")
+        break
+
+    if not user_input:
+        continue
+
+    if user_input.lower() == "/выход":
+        print(f"{BOT_NAME}: Пока! Было приятно поболтать.")
+        break
+
+    if user_input.lower() == "/память":
+        print("\n--- ПАМЯТЬ ---")
+        print("Имя:", memory["name"] if memory["name"] else "неизвестно")
+        if memory["facts"]:
+            print("Факты:")
+            for fact in memory["facts"]:
+                print("-", fact)
+        else:
+            print("Факты: пусто")
+        print("--------------\n")
+        continue
+
+    if user_input.lower() == "/сброс":
+        messages = [{"role": "system", "content": system_prompt}]
+        memory = {"name": None, "facts": []}
+        short_mode = False
+        print(f"{BOT_NAME}: История и память очищены.")
+        continue
+
+    if user_input.lower() == "/кратко":
+        short_mode = True
+        print(f"{BOT_NAME}: Хорошо, теперь буду отвечать короче.")
+        continue
+
+    if user_input.lower() == "/обычно":
+        short_mode = False
+        print(f"{BOT_NAME}: Окей, возвращаю обычный стиль.")
+        continue
+
+    update_memory(user_input)
+
+    temp_messages = [{"role": "system", "content": system_prompt}]
+
+    memory_message = build_memory_message()
+    if memory_message:
+        temp_messages.append(memory_message)
+
+    if short_mode:
+        temp_messages.append({
+            "role": "system",
+            "content": "Сейчас отвечай кратко: 1–3 предложения, если пользователь не просит подробнее."
+        })
+
+    temp_messages.extend(messages[1:])
+    temp_messages.append({"role": "user", "content": user_input})
+
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=temp_messages,
+            temperature=0.9,
+            max_tokens=300
+        )
+
+        bot_reply = response.choices[0].message.content.strip()
+
+        print(f"{BOT_NAME}: {bot_reply}")
+
+        messages.append({"role": "user", "content": user_input})
+        messages.append({"role": "assistant", "content": bot_reply})
+
+        if len(messages) > 21:
+            messages = [messages[0]] + messages[-20:]
+
+    except Exception as e:
+        print(f"{BOT_NAME}: Ошибка: {e}")
